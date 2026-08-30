@@ -130,9 +130,9 @@ def copy_range(source: Path, target: Path, offset: int, size: int) -> None:
             remaining -= len(block)
 
 
-def add_stored(archive: zipfile.ZipFile, source: Path, name: str, mode: int = 0o644) -> None:
+def add_archive_file(archive: zipfile.ZipFile, source: Path, name: str, mode: int = 0o644) -> None:
     info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-    info.compress_type = zipfile.ZIP_STORED
+    info.compress_type = zipfile.ZIP_DEFLATED
     info.create_system = 3
     info.external_attr = mode << 16
     with source.open("rb") as incoming, archive.open(info, "w", force_zip64=True) as outgoing:
@@ -324,10 +324,10 @@ def build_bundle(
         if not license_path.is_file() or not license_path.stat().st_size:
             raise ReleaseError("Project license is missing")
         with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
-            add_stored(archive, esp_image, "esp.img")
-            add_stored(archive, root_image, "root.img")
-            add_stored(archive, attribution, "ATTRIBUTION.md")
-            add_stored(archive, license_path, "LICENSE")
+            add_archive_file(archive, esp_image, "esp.img")
+            add_archive_file(archive, root_image, "root.img")
+            add_archive_file(archive, attribution, "ATTRIBUTION.md")
+            add_archive_file(archive, license_path, "LICENSE")
 
         package_url = f"{base_url.rstrip('/')}/{package_name}"
         installer_data = {

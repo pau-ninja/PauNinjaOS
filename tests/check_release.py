@@ -120,6 +120,7 @@ def checks(source_only: bool) -> None:
         fake_disk(raw)
         release.build_bundle(raw, "0.1.0", "https://example.test/releases", output, ROOT / "ATTRIBUTION.md", False)
         release.validate_bundle(output)
+        assert next(output.glob("*.zip")).stat().st_size < raw.stat().st_size, "release package is not compressed"
 
         invalid_version = directory / "invalid-version"
         try:
