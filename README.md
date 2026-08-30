@@ -16,7 +16,7 @@ Use an AArch64 Linux builder with Nix flakes enabled:
 
 The build creates a raw PauNinjaOS disk image, extracts its EFI and root partitions, packages them in the format consumed by the Apple Silicon installer, generates installer metadata, records hashes and sizes, and labels the result `SOURCE_BUILDABLE`.
 
-The included GitHub workflow performs the same build on an ARM runner. Inputs and workflow actions are pinned to immutable commits.
+The same command can run on any trusted ARM Linux builder. Source inputs are pinned to immutable commits and locked for reproducibility.
 
 ## Hardware approval
 
