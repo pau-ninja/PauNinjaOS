@@ -4,7 +4,9 @@ PauNinjaOS is a console-first Apple Silicon operating-system distribution intend
 
 ## Current status
 
-The repository is a source prototype, not a built or hardware-tested installer release. Its source checks pass locally; the Nix image build still requires an AArch64 Linux builder. Release signing is intentionally unconfigured, so the macOS bootstrap remains locked until a trusted public key is pinned. It then still refuses installation until the exact built package passes installation, first boot, networking, update, and rollback checks on each declared Mac model.
+The repository produces a source-buildable package on an AArch64 Linux builder. It is not a hardware-tested installer release. Release signing is intentionally unconfigured, so the public macOS bootstrap remains locked until the exact package passes installation, first boot, networking, update, and rollback checks on every declared Mac model.
+
+The initial firmware set is for supported M1/M2-era machines. M3 and newer Macs are not advertised until upstream support and model-specific hardware evidence exist.
 
 ## Build
 
@@ -14,19 +16,37 @@ Use an AArch64 Linux builder with Nix flakes enabled:
 ./build-release.sh 0.1.0 https://pau.ninja/os/releases/0.1.0
 ```
 
-The build creates a raw PauNinjaOS disk image, extracts its EFI and root partitions, packages them in the format consumed by the Apple Silicon installer, generates installer metadata, records hashes and sizes, and labels the result `SOURCE_BUILDABLE`.
+The build refuses uncommitted source, creates a raw PauNinjaOS disk image, extracts its EFI and root partitions, packages them in the format consumed by the Apple Silicon installer, records the exact source revision, hashes, and sizes, and labels the result `SOURCE_BUILDABLE`.
 
-The same command can run on any trusted ARM Linux builder. Source inputs are pinned to immutable commits and locked for reproducibility.
+The same command can run on any trusted ARM Linux builder. Source inputs are pinned to immutable commits. The package builder is deterministic for a fixed raw image; full disk-image bit reproducibility must be demonstrated by two independent builds before making that stronger claim.
+
+## Private hardware test
+
+The public installer stays locked before evidence exists. On the target Mac, use the reviewed local bundle to perform the first explicitly untested installation:
+
+```sh
+scripts/hardware-test-install.sh dist/0.1.0
+```
+
+The helper verifies the complete bundle, displays the target model, and requires typing the exact package digest before delegating partitioning and recovery authorization to the pinned Apple Silicon installer. It never promotes or signs the release.
 
 ## Hardware approval
 
-Test the generated package on every Mac model you plan to advertise. Record the exact package SHA-256 and successful checks in a `PAUNINJAOS_HARDWARE_TEST_V1` JSON object, then run:
+Test the generated package on every Mac model you plan to advertise using firmware compatible with that model, including the installer's default firmware path. Record the exact package SHA-256 plus one or more `PAUNINJAOS_HARDWARE_TEST_V2` cases per model. Every case must include the installer and observed system firmware, timestamps, operator, retained log name and SHA-256, and successful installation, first-boot, networking, update, and rollback checks. Then run:
 
 ```sh
 python3 scripts/release.py promote dist/0.1.0 hardware-test.json
 ```
 
-Promotion fails if the package, installer metadata, boot-installer identity, firmware versions, or any required check differs. Sign the resulting canonical release manifest with an offline key, host its detached signature and public key, then pin that public key's SHA-256 in the bootstrap. Only a promoted, signed bundle can pass the macOS gate.
+Promotion fails if the package, installer metadata, boot-installer identity, firmware versions, or any required check differs. Sign the resulting canonical release manifest with an offline key:
+
+```sh
+scripts/sign-release.sh dist/0.1.0 /secure/path/release-private-key.pem
+```
+
+The signing command verifies the signature and creates an upload-ready `install` entrypoint with the exact release version, release directory, and public-key digest pinned. Only a promoted, signed bundle can produce that entrypoint or pass the macOS gate.
+
+Upstream attribution, the downstream license, and the corresponding-source offer are installed under `/etc/pauninjaos` in the running system.
 
 ## Install
 
@@ -42,7 +62,7 @@ Apple requires a recoveryOS authorization step. PauNinjaOS cannot and should not
 
 ## Updates
 
-Routine development uses declarative generations, not repeated installations. On the target Mac:
+Routine development uses declarative generations, not repeated installations. This is intentionally a developer channel: an immutable revision is required, but it may be newer than the last hardware-approved installer release. On the target Mac:
 
 ```sh
 PAUNINJAOS_FLAKE=github:pau-ninja/PauNinjaOS/0123456789abcdef0123456789abcdef01234567 pauninjaos-update stage
@@ -54,4 +74,4 @@ This accepts only an immutable 40-character source revision, stages the next gen
 
 No display manager, desktop environment, compositor, panel, or placeholder GUI is included. The system boots to a console, leaving the complete visual layer available for PauNinjaOS development.
 
-See [ATTRIBUTION.md](ATTRIBUTION.md) for upstream work and licenses.
+See [ATTRIBUTION.md](ATTRIBUTION.md) and [SOURCE_OFFER.md](SOURCE_OFFER.md) for upstream work, licenses, and corresponding-source availability.

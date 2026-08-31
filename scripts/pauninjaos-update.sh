@@ -9,7 +9,11 @@ fi
 case "$action" in
   stage)
     source=${PAUNINJAOS_FLAKE:?Set PAUNINJAOS_FLAKE to the approved release flake URL}
-    if ! printf '%s\n' "$source" | grep -Eq '^github:pau-ninja/PauNinjaOS/[0-9a-f]{40}$'; then
+    case "$source" in
+      *[!0-9A-Za-z:/_-]*) valid_source=false ;;
+      *) valid_source=true ;;
+    esac
+    if [ "$valid_source" != true ] || ! printf '%s\n' "$source" | grep -Eq '^github:pau-ninja/PauNinjaOS/[0-9a-f]{40}$'; then
       echo "PAUNINJAOS_FLAKE must identify one immutable PauNinjaOS Git revision." >&2
       exit 2
     fi

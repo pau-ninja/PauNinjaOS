@@ -7,7 +7,7 @@
     baseName = "pauninjaos";
     format = "raw";
     partitionTableType = "efi";
-    bootSize = "512M";
+    bootSize = "2048M";
     additionalSpace = "2G";
     label = "PAUNINJAOS";
     deterministic = true;

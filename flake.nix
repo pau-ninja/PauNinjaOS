@@ -40,6 +40,7 @@
         packages = with pkgs; [
           dosfstools
           e2fsprogs
+          openssl
           python3
         ];
       };

@@ -6,12 +6,13 @@ INSTALLER_SHA256=1dc51ec2cce25392e1eae2601c9dc1244e04cb51dbc207b51c815ead6ceeab3
 INSTALLER_BASE=https://cdn.asahilinux.org/installer
 PAUNINJAOS_BASE=${PAUNINJAOS_BASE:-https://pau.ninja/os/releases/current}
 RELEASE_PUBLIC_KEY_SHA256=UNCONFIGURED
+RELEASE_VERSION=UNCONFIGURED
 
 if [ ! -e /System/Library/CoreServices/SystemVersion.plist ]; then
   echo "PauNinjaOS installation must start from macOS or recoveryOS." >&2
   exit 1
 fi
-for tool in caffeinate curl cut grep id mktemp openssl plutil shasum stat sysctl tar; do
+for tool in caffeinate curl cut grep id mktemp openssl plutil rm shasum stat sysctl tar; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "PauNinjaOS needs the full macOS command-line environment; missing $tool." >&2
     exit 1
@@ -32,12 +33,19 @@ fetch() {
   curl --fail --proto '=https' --proto-redir '=https' --no-progress-meter -L "$@"
 }
 
-if [ "$RELEASE_PUBLIC_KEY_SHA256" = UNCONFIGURED ]; then
+if [ "$RELEASE_PUBLIC_KEY_SHA256" = UNCONFIGURED ] || [ "$RELEASE_VERSION" = UNCONFIGURED ]; then
   echo "PauNinjaOS release signing is not configured; installation remains locked." >&2
   exit 1
 fi
 
 work=$(mktemp -d /tmp/pauninjaos-install.XXXXXX)
+cleanup() {
+  cd /
+  if [ -d "$work" ]; then
+    rm -R -- "$work"
+  fi
+}
+trap cleanup EXIT
 cd "$work"
 archive="installer-$INSTALLER_VERSION.tar.gz"
 fetch -o "$archive" "$INSTALLER_BASE/$archive"
@@ -46,11 +54,17 @@ if [ "$actual_installer" != "$INSTALLER_SHA256" ]; then
   echo "PauNinjaOS boot installer failed verification." >&2
   exit 1
 fi
-if ! tar tf "$archive" | while IFS= read -r member; do
+if ! tar tf "$archive" > installer.members; then
+  echo "PauNinjaOS boot installer could not be inspected." >&2
+  exit 1
+fi
+unsafe_archive=0
+while IFS= read -r member; do
   case "$member" in
-    /*|../*|*/../*|*/..) exit 1 ;;
+    ..|/*|../*|*/../*|*/..) unsafe_archive=1; break ;;
   esac
-done; then
+done < installer.members
+if [ "$unsafe_archive" -ne 0 ]; then
   echo "PauNinjaOS boot installer contains an unsafe path." >&2
   exit 1
 fi
@@ -74,9 +88,10 @@ fi
 status=$(/usr/bin/plutil -extract status raw -o - release.json)
 installable=$(/usr/bin/plutil -extract installable raw -o - release.json)
 schema=$(/usr/bin/plutil -extract schema raw -o - release.json)
+version=$(/usr/bin/plutil -extract version raw -o - release.json)
 approved_installer_version=$(/usr/bin/plutil -extract boot_installer.version raw -o - release.json)
 approved_installer_sha256=$(/usr/bin/plutil -extract boot_installer.sha256 raw -o - release.json)
-if [ "$schema" != PAUNINJAOS_RELEASE_V1 ] || [ "$status" != HARDWARE_TESTED ] || [ "$installable" != true ]; then
+if [ "$schema" != PAUNINJAOS_RELEASE_V1 ] || [ "$version" != "$RELEASE_VERSION" ] || [ "$status" != HARDWARE_TESTED ] || [ "$installable" != true ]; then
   echo "This PauNinjaOS release is not approved for installation on real hardware." >&2
   exit 1
 fi
@@ -92,8 +107,10 @@ fi
 
 fetch -o installer_data.json "$INSTALLER_DATA"
 expected_metadata=$(/usr/bin/plutil -extract installer_data.sha256 raw -o - release.json)
+expected_metadata_size=$(/usr/bin/plutil -extract installer_data.size raw -o - release.json)
 actual_metadata=$(shasum -a 256 installer_data.json | cut -d ' ' -f 1)
-if [ "$actual_metadata" != "$expected_metadata" ]; then
+actual_metadata_size=$(stat -f %z installer_data.json)
+if [ "$actual_metadata" != "$expected_metadata" ] || [ "$actual_metadata_size" != "$expected_metadata_size" ]; then
   echo "PauNinjaOS installer metadata failed verification." >&2
   exit 1
 fi
@@ -127,12 +144,15 @@ if [ "$actual_metadata" != "$expected_metadata" ] || [ "$actual_package" != "$pa
   echo "PauNinjaOS verified files changed before installation." >&2
   exit 1
 fi
+export INSTALLER_DATA="$PWD/installer_data.json"
+export INSTALLER_DATA_ALT="$INSTALLER_DATA"
 
 if [ "$(id -u)" -ne 0 ]; then
   if ! command -v sudo >/dev/null 2>&1; then
     echo "PauNinjaOS needs sudo when installation starts outside recoveryOS." >&2
     exit 1
   fi
-  exec caffeinate -dis sudo -E ./install.sh "$@"
+  caffeinate -dis sudo -E ./install.sh "$@"
+else
+  caffeinate -dis ./install.sh "$@"
 fi
-exec caffeinate -dis ./install.sh "$@"

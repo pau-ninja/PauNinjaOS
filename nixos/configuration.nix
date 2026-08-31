@@ -6,6 +6,9 @@ let
     runtimeInputs = [ pkgs.gnugrep ];
     text = builtins.readFile ../scripts/pauninjaos-update.sh;
   };
+  firmwareTool = pkgs.writers.writePython3Bin "pauninjaos-firmware" { } (
+    builtins.readFile ../scripts/firmware.py
+  );
 in
 {
   assertions = [
@@ -101,25 +104,31 @@ in
     description = "Load machine-specific Apple firmware copied by the installer";
     wantedBy = [ "multi-user.target" ];
     before = [ "NetworkManager.service" ];
-    unitConfig.ConditionPathExists = "/boot/vendorfw/firmware.cpio";
-    path = [ pkgs.coreutils pkgs.cpio pkgs.kmod ];
+    path = [ pkgs.coreutils firmwareTool pkgs.kmod ];
     script = ''
       archive=/boot/vendorfw/firmware.cpio
+      if [ ! -f "$archive" ]; then
+        echo "Installer firmware archive is missing." >&2
+        exit 1
+      fi
       digest=$(sha256sum "$archive" | cut -d ' ' -f 1)
       target=/var/lib/pauninjaos-firmware/$digest
       if [ ! -e "$target/.complete" ]; then
-        if [ -e "$target" ]; then
-          mv "$target" "$target-incomplete-$(date +%s)"
-        fi
-        install -d -m 0755 "$target"
-        cd "$target"
-        cpio -id --quiet --no-absolute-filenames < "$archive"
-        touch "$target/.complete"
+        pauninjaos-firmware "$archive" "$target"
+      fi
+      manifest="$target/vendorfw/.vendorfw.manifest"
+      if [ ! -f "$manifest" ]; then
+        echo "Installer firmware archive lacks its integrity manifest." >&2
+        exit 1
       fi
       install -d -m 0755 /var/lib/pauninjaos-firmware
       ln -sfn "$target/vendorfw" /var/lib/pauninjaos-firmware/current
-      modprobe brcmfmac
-      modprobe hci_bcm4377
+      if ! modprobe brcmfmac; then
+        echo "Wi-Fi firmware could not be loaded; console recovery remains available." >&2
+      fi
+      if ! modprobe hci_bcm4377; then
+        echo "Bluetooth firmware could not be loaded; console recovery remains available." >&2
+      fi
     '';
   };
 
@@ -133,6 +142,9 @@ in
   environment.etc."motd".text = ''
     PauNinjaOS is console-first. Stage updates with pauninjaos-update.
   '';
+  environment.etc."pauninjaos/ATTRIBUTION.md".source = ../ATTRIBUTION.md;
+  environment.etc."pauninjaos/LICENSE".source = ../LICENSE;
+  environment.etc."pauninjaos/SOURCE_OFFER.md".source = ../SOURCE_OFFER.md;
 
   nix = {
     settings.experimental-features = [ "nix-command" "flakes" ];
