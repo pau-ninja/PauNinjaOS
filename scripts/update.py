@@ -165,7 +165,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     verifier = subparsers.add_parser("verify")
-    names = ("manifest", "signature", "allowed_signers", "base_serial", "state")
+    names = (
+        "manifest", "signature", "allowed_signers", "base_serial", "state"
+    )
     for name in names:
         verifier.add_argument(name, type=Path)
     committer = subparsers.add_parser("commit")
