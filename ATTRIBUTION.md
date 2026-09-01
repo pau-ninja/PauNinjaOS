@@ -10,4 +10,6 @@ Source and license information:
 - Linux kernel: https://kernel.org
 - U-Boot: https://source.denx.de/u-boot/u-boot
 
+Each release manifest records the exact PauNinjaOS source revision. Complete corresponding-source availability for redistributed copyleft components is described in `SOURCE_OFFER.md`, which is shipped inside every release package and installed system.
+
 No upstream project endorses PauNinjaOS. Their names remain in source references, diagnostics, package metadata, and legal notices. PauNinjaOS branding applies only to the downstream product experience.

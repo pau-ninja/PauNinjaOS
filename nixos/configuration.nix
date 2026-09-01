@@ -1,11 +1,17 @@
 { config, lib, pkgs, ... }:
 
 let
+  updateVerifier = pkgs.writers.writePython3Bin "pauninjaos-update-verify" { } (
+    builtins.readFile ../scripts/update.py
+  );
   updateTool = pkgs.writeShellApplication {
     name = "pauninjaos-update";
-    runtimeInputs = [ pkgs.gnugrep ];
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.gnugrep pkgs.gnutar pkgs.openssh updateVerifier ];
     text = builtins.readFile ../scripts/pauninjaos-update.sh;
   };
+  firmwareTool = pkgs.writers.writePython3Bin "pauninjaos-firmware" { } (
+    builtins.readFile ../scripts/firmware.py
+  );
 in
 {
   assertions = [
@@ -101,29 +107,60 @@ in
     description = "Load machine-specific Apple firmware copied by the installer";
     wantedBy = [ "multi-user.target" ];
     before = [ "NetworkManager.service" ];
-    unitConfig.ConditionPathExists = "/boot/vendorfw/firmware.cpio";
-    path = [ pkgs.coreutils pkgs.cpio pkgs.kmod ];
+    path = [ pkgs.coreutils firmwareTool pkgs.kmod ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
     script = ''
       archive=/boot/vendorfw/firmware.cpio
+      if [ ! -f "$archive" ]; then
+        echo "Installer firmware archive is missing." >&2
+        exit 1
+      fi
       digest=$(sha256sum "$archive" | cut -d ' ' -f 1)
       target=/var/lib/pauninjaos-firmware/$digest
       if [ ! -e "$target/.complete" ]; then
-        if [ -e "$target" ]; then
-          mv "$target" "$target-incomplete-$(date +%s)"
-        fi
-        install -d -m 0755 "$target"
-        cd "$target"
-        cpio -id --quiet --no-absolute-filenames < "$archive"
-        touch "$target/.complete"
+        pauninjaos-firmware "$archive" "$target"
+      fi
+      manifest="$target/vendorfw/.vendorfw.manifest"
+      if [ ! -f "$manifest" ]; then
+        echo "Installer firmware archive lacks its integrity manifest." >&2
+        exit 1
       fi
       install -d -m 0755 /var/lib/pauninjaos-firmware
       ln -sfn "$target/vendorfw" /var/lib/pauninjaos-firmware/current
-      modprobe brcmfmac
-      modprobe hci_bcm4377
+      if ! modprobe brcmfmac; then
+        echo "Wi-Fi firmware could not be loaded; console recovery remains available." >&2
+      fi
+      if ! modprobe hci_bcm4377; then
+        echo "Bluetooth firmware could not be loaded; console recovery remains available." >&2
+      fi
     '';
   };
 
-  boot.blacklistedKernelModules = [ "brcmfmac" "hci_bcm4377" ];
+  systemd.services.pauninjaos-update = {
+    description = "Stage verified PauNinjaOS system updates";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${updateTool}/bin/pauninjaos-update auto";
+      Nice = 10;
+      IOSchedulingClass = "idle";
+    };
+  };
+
+  systemd.timers.pauninjaos-update = {
+    description = "Check for PauNinjaOS system updates";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "15m";
+      OnUnitActiveSec = "6h";
+      RandomizedDelaySec = "30m";
+      Persistent = true;
+    };
+  };
 
   environment.systemPackages = with pkgs; [
     git
@@ -133,6 +170,14 @@ in
   environment.etc."motd".text = ''
     PauNinjaOS is console-first. Stage updates with pauninjaos-update.
   '';
+  environment.etc."pauninjaos/ATTRIBUTION.md".source = ../ATTRIBUTION.md;
+  environment.etc."pauninjaos/LICENSE".source = ../LICENSE;
+  environment.etc."pauninjaos/SOURCE_OFFER.md".source = ../SOURCE_OFFER.md;
+  environment.etc."pauninjaos/update-allowed-signers".source = ../release/update-allowed-signers;
+  environment.etc."pauninjaos/update-serial" = {
+    mode = "0444";
+    text = "1\n";
+  };
 
   nix = {
     settings.experimental-features = [ "nix-command" "flakes" ];

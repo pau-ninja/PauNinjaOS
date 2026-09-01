@@ -30,7 +30,7 @@
       };
 
       checks.${system}.source-policy = pkgs.runCommand "pauninjaos-source-policy" {
-        nativeBuildInputs = [ pkgs.python3 ];
+        nativeBuildInputs = [ pkgs.openssh pkgs.python3 ];
       } ''
         python3 ${self}/tests/check_release.py --source
         touch $out
@@ -40,6 +40,7 @@
         packages = with pkgs; [
           dosfstools
           e2fsprogs
+          openssh
           python3
         ];
       };

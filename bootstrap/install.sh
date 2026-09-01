@@ -3,24 +3,29 @@ set -eu
 
 INSTALLER_VERSION=v0.9.0
 INSTALLER_SHA256=1dc51ec2cce25392e1eae2601c9dc1244e04cb51dbc207b51c815ead6ceeab33
+INSTALLER_SIZE=22211382
 INSTALLER_BASE=https://cdn.asahilinux.org/installer
 PAUNINJAOS_BASE=${PAUNINJAOS_BASE:-https://pau.ninja/os/releases/current}
 RELEASE_PUBLIC_KEY_SHA256=UNCONFIGURED
+RELEASE_PUBLIC_KEY_SIZE=UNCONFIGURED
+RELEASE_MANIFEST_SIZE=UNCONFIGURED
+RELEASE_SIGNATURE_SIZE=UNCONFIGURED
+RELEASE_VERSION=UNCONFIGURED
 
 if [ ! -e /System/Library/CoreServices/SystemVersion.plist ]; then
   echo "PauNinjaOS installation must start from macOS or recoveryOS." >&2
   exit 1
 fi
-for tool in caffeinate curl cut grep id mktemp openssl plutil shasum stat sysctl tar; do
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+for tool in caffeinate curl cut grep id mktemp openssl plutil rm shasum stat sysctl tar; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "PauNinjaOS needs the full macOS command-line environment; missing $tool." >&2
     exit 1
   fi
 done
 
-export LC_ALL=en_US.UTF-8
-export LANG=en_US.UTF-8
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export DISTRO=PauNinjaOS
 export DISTRO_DOCS=https://pau.ninja/os/docs
 export INSTALLER_DATA="$PAUNINJAOS_BASE/installer_data.json"
@@ -32,25 +37,43 @@ fetch() {
   curl --fail --proto '=https' --proto-redir '=https' --no-progress-meter -L "$@"
 }
 
-if [ "$RELEASE_PUBLIC_KEY_SHA256" = UNCONFIGURED ]; then
+if [ "$RELEASE_PUBLIC_KEY_SHA256" = UNCONFIGURED ] ||
+   [ "$RELEASE_PUBLIC_KEY_SIZE" = UNCONFIGURED ] ||
+   [ "$RELEASE_MANIFEST_SIZE" = UNCONFIGURED ] ||
+   [ "$RELEASE_SIGNATURE_SIZE" = UNCONFIGURED ] ||
+   [ "$RELEASE_VERSION" = UNCONFIGURED ]; then
   echo "PauNinjaOS release signing is not configured; installation remains locked." >&2
   exit 1
 fi
 
 work=$(mktemp -d /tmp/pauninjaos-install.XXXXXX)
+cleanup() {
+  cd /
+  if [ -d "$work" ]; then
+    rm -R -- "$work"
+  fi
+}
+trap cleanup EXIT
 cd "$work"
 archive="installer-$INSTALLER_VERSION.tar.gz"
-fetch -o "$archive" "$INSTALLER_BASE/$archive"
+fetch --max-filesize "$INSTALLER_SIZE" -o "$archive" "$INSTALLER_BASE/$archive"
+actual_installer_size=$(stat -f %z "$archive")
 actual_installer=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
-if [ "$actual_installer" != "$INSTALLER_SHA256" ]; then
+if [ "$actual_installer_size" != "$INSTALLER_SIZE" ] || [ "$actual_installer" != "$INSTALLER_SHA256" ]; then
   echo "PauNinjaOS boot installer failed verification." >&2
   exit 1
 fi
-if ! tar tf "$archive" | while IFS= read -r member; do
+if ! tar tf "$archive" > installer.members; then
+  echo "PauNinjaOS boot installer could not be inspected." >&2
+  exit 1
+fi
+unsafe_archive=0
+while IFS= read -r member; do
   case "$member" in
-    /*|../*|*/../*|*/..) exit 1 ;;
+    ..|/*|../*|*/../*|*/..) unsafe_archive=1; break ;;
   esac
-done; then
+done < installer.members
+if [ "$unsafe_archive" -ne 0 ]; then
   echo "PauNinjaOS boot installer contains an unsafe path." >&2
   exit 1
 fi
@@ -59,14 +82,20 @@ tar xf "$archive" -C runtime
 cd runtime
 export REPO_BASE="$PWD"
 
-fetch -o release-public-key.pem "$PAUNINJAOS_BASE/release-public-key.pem"
+fetch --max-filesize "$RELEASE_PUBLIC_KEY_SIZE" -o release-public-key.pem "$PAUNINJAOS_BASE/release-public-key.pem"
 actual_public_key=$(shasum -a 256 release-public-key.pem | cut -d ' ' -f 1)
-if [ "$actual_public_key" != "$RELEASE_PUBLIC_KEY_SHA256" ]; then
+if [ "$(stat -f %z release-public-key.pem)" != "$RELEASE_PUBLIC_KEY_SIZE" ] ||
+   [ "$actual_public_key" != "$RELEASE_PUBLIC_KEY_SHA256" ]; then
   echo "PauNinjaOS release key failed verification." >&2
   exit 1
 fi
-fetch -o release.json "$PAUNINJAOS_BASE/release.json"
-fetch -o release.json.sig "$PAUNINJAOS_BASE/release.json.sig"
+fetch --max-filesize "$RELEASE_MANIFEST_SIZE" -o release.json "$PAUNINJAOS_BASE/release.json"
+fetch --max-filesize "$RELEASE_SIGNATURE_SIZE" -o release.json.sig "$PAUNINJAOS_BASE/release.json.sig"
+if [ "$(stat -f %z release.json)" != "$RELEASE_MANIFEST_SIZE" ] ||
+   [ "$(stat -f %z release.json.sig)" != "$RELEASE_SIGNATURE_SIZE" ]; then
+  echo "PauNinjaOS signed release files have the wrong size." >&2
+  exit 1
+fi
 if ! /usr/bin/openssl dgst -sha256 -verify release-public-key.pem -signature release.json.sig release.json >/dev/null 2>&1; then
   echo "PauNinjaOS release signature is invalid." >&2
   exit 1
@@ -74,9 +103,14 @@ fi
 status=$(/usr/bin/plutil -extract status raw -o - release.json)
 installable=$(/usr/bin/plutil -extract installable raw -o - release.json)
 schema=$(/usr/bin/plutil -extract schema raw -o - release.json)
+version=$(/usr/bin/plutil -extract version raw -o - release.json)
 approved_installer_version=$(/usr/bin/plutil -extract boot_installer.version raw -o - release.json)
 approved_installer_sha256=$(/usr/bin/plutil -extract boot_installer.sha256 raw -o - release.json)
-if [ "$schema" != PAUNINJAOS_RELEASE_V1 ] || [ "$status" != HARDWARE_TESTED ] || [ "$installable" != true ]; then
+case "$installable" in
+  true|1) ;;
+  *) echo "This PauNinjaOS release is not approved for installation on real hardware." >&2; exit 1 ;;
+esac
+if [ "$schema" != PAUNINJAOS_RELEASE_V1 ] || [ "$version" != "$RELEASE_VERSION" ] || [ "$status" != HARDWARE_TESTED ]; then
   echo "This PauNinjaOS release is not approved for installation on real hardware." >&2
   exit 1
 fi
@@ -90,10 +124,15 @@ if ! /usr/bin/plutil -extract supported_models xml1 -o - release.json | grep -Fq
   exit 1
 fi
 
-fetch -o installer_data.json "$INSTALLER_DATA"
 expected_metadata=$(/usr/bin/plutil -extract installer_data.sha256 raw -o - release.json)
+expected_metadata_size=$(/usr/bin/plutil -extract installer_data.size raw -o - release.json)
+case "$expected_metadata_size" in
+  ""|*[!0-9]*) echo "PauNinjaOS installer metadata size is invalid." >&2; exit 1 ;;
+esac
+fetch --max-filesize "$expected_metadata_size" -o installer_data.json "$INSTALLER_DATA"
 actual_metadata=$(shasum -a 256 installer_data.json | cut -d ' ' -f 1)
-if [ "$actual_metadata" != "$expected_metadata" ]; then
+actual_metadata_size=$(stat -f %z installer_data.json)
+if [ "$actual_metadata" != "$expected_metadata" ] || [ "$actual_metadata_size" != "$expected_metadata_size" ]; then
   echo "PauNinjaOS installer metadata failed verification." >&2
   exit 1
 fi
@@ -108,14 +147,23 @@ package_name=${package_url##*/}
 case "$package_name" in
   ""|*/*|*..*) echo "PauNinjaOS package name is unsafe." >&2; exit 1 ;;
 esac
+metadata_package_name=$(/usr/bin/plutil -extract os_list.0.package raw -o - installer_data.json)
+if [ "$metadata_package_name" != "$package_name" ] ||
+   [ "$package_name" != "pauninjaos-$RELEASE_VERSION-apple-silicon.zip" ]; then
+  echo "PauNinjaOS package name disagrees with verified installer metadata." >&2
+  exit 1
+fi
+expected_package_size=$(/usr/bin/plutil -extract package.size raw -o - release.json)
+case "$expected_package_size" in
+  ""|*[!0-9]*) echo "PauNinjaOS package size is invalid." >&2; exit 1 ;;
+esac
 mkdir -p os
-fetch -o "os/$package_name" "$package_url"
+fetch --max-filesize "$expected_package_size" -o "os/$package_name" "$package_url"
 actual_package=$(shasum -a 256 "os/$package_name" | cut -d ' ' -f 1)
 if [ "$actual_package" != "$package_sha256" ]; then
   echo "PauNinjaOS package failed verification." >&2
   exit 1
 fi
-expected_package_size=$(/usr/bin/plutil -extract package.size raw -o - release.json)
 actual_package_size=$(stat -f %z "os/$package_name")
 if [ "$actual_package_size" != "$expected_package_size" ]; then
   echo "PauNinjaOS package size failed verification." >&2
@@ -127,12 +175,18 @@ if [ "$actual_metadata" != "$expected_metadata" ] || [ "$actual_package" != "$pa
   echo "PauNinjaOS verified files changed before installation." >&2
   exit 1
 fi
+export INSTALLER_DATA="$PWD/installer_data.json"
+export INSTALLER_DATA_ALT="$INSTALLER_DATA"
 
 if [ "$(id -u)" -ne 0 ]; then
   if ! command -v sudo >/dev/null 2>&1; then
     echo "PauNinjaOS needs sudo when installation starts outside recoveryOS." >&2
     exit 1
   fi
-  exec caffeinate -dis sudo -E ./install.sh "$@"
+  caffeinate -dis /usr/bin/sudo /usr/bin/env \
+    DISTRO="$DISTRO" DISTRO_DOCS="$DISTRO_DOCS" REPO_BASE="$REPO_BASE" \
+    INSTALLER_DATA="$INSTALLER_DATA" INSTALLER_DATA_ALT="$INSTALLER_DATA_ALT" \
+    REPORT="$REPORT" REPORT_TAG="$REPORT_TAG" ./install.sh "$@"
+else
+  caffeinate -dis ./install.sh "$@"
 fi
-exec caffeinate -dis ./install.sh "$@"
